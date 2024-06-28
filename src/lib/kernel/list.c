@@ -522,3 +522,37 @@ list_min (struct list *list, list_less_func *less, void *aux)
     }
   return min;
 }
+
+struct list_elem* list_find(const struct list* l, list_judge_func* judger, void* aux) {
+    ASSERT(l != NULL);
+    struct list_elem* ret = NULL;
+    for(const struct list_elem* iter = list_begin(l) ; iter != list_end(l) ; iter = list_next(iter)) {
+        if(judger(iter, aux)) {
+            ret = iter;
+            break;
+        }
+    }
+    return ret;
+}
+
+int list_remove_if(struct list* l, list_judge_func* judger, void* aux) {
+    ASSERT(l != NULL);
+    ASSERT(judger != NULL);
+
+    int success = 0;
+    struct list_elem * cur = list_begin(l);
+    struct list_elem * next = NULL;
+
+    while(cur != list_end(l)) {
+        next = list_next(cur);
+
+        if(judger(cur, aux)) {
+            list_remove(cur);
+            ++success;
+        }
+
+        cur = next;
+    }
+
+    return success;
+} 

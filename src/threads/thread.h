@@ -24,6 +24,27 @@ typedef int tid_t;
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
 
+struct thread;
+struct Priority_Donate_Info;
+struct Priority_Donate_Receive_Info;
+struct lock;
+
+struct Priority_Donate_Receive_Info {
+   struct list_elem elem;
+   struct thread* receive_from;
+   int priority;
+   struct lock* lk;
+};
+
+bool priority_larger_func(const struct list_elem* lhs, const struct list_elem* rhs, void* aux);
+bool priority_donate_receive_info_larger_func(const struct list_elem* lhs, const struct list_elem* rhs, void* aux);
+
+struct Priority_Donate_Info {
+   struct thread* donate_to;
+   struct list receive_info;
+};
+
+
 /* A kernel thread or user process.
 
    Each thread structure is stored in its own 4 kB page.  The
@@ -96,6 +117,8 @@ struct thread
     /* Shared between thread.c and timer.c */
     int64_t wake_up;
 
+    struct Priority_Donate_Info priority_donate_info;
+
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
@@ -133,6 +156,9 @@ void thread_yield (void);
 typedef void thread_action_func (struct thread *t, void *aux);
 void thread_foreach (thread_action_func *, void *);
 
+int any_thread_get_priority(const struct thread*);
+void any_thread_set_priority(struct thread* , int);
+
 int thread_get_priority (void);
 void thread_set_priority (int);
 
@@ -140,5 +166,31 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+
+// Priority Donation Interface //
+
+void priority_donate_info_init(struct Priority_Donate_Info*);
+
+int get_donated_priority(const struct Priority_Donate_Info*);
+
+/**
+ * @brief 若`t->priority_donate_info.donate_to`不为空,则将`t`捐献出的优先级改为`t`的优先级,并更新`t`优先级的接受者的优先级.
+ * 
+*/
+void update_priority(struct thread* t);
+
+/**
+ * @brief 1.根据`from`,`from`的优先级和`lk`构造`receive_info`,并将其存入`to->priority_donate_info.receive_info`中.
+ *        2.将`from->priority_donate_info.donate_to`中.
+ *        3.更新`to`的优先级.
+*/
+void donate_priority(struct Priority_Donate_Receive_Info* receive_info, struct thread* from, struct thread* to, struct lock* lk);
+
+/**
+ * @brief   1.找到所有通过`lk`将优先级捐献给`t`的线程,将这些线程的捐赠者改为无.
+*/
+void release_priority(struct thread* t, struct lock* lk);
+
+int get_ready_list_highest_pri(void);
 
 #endif /* threads/thread.h */
