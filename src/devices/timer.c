@@ -190,9 +190,13 @@ timer_print_stats (void)
 static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
+    struct thread* cur = thread_current();
     struct thread* wait = NULL;
     struct list_elem* front = NULL;
+
     ticks++;
+    thread_tick();
+
     while(!list_empty(&sleep_list)) {
         front = list_front(&sleep_list);
         wait = list_entry(front, struct thread, elem);
@@ -204,7 +208,9 @@ timer_interrupt (struct intr_frame *args UNUSED)
             break;
         }
     }
-    thread_tick ();
+    
+    if(thread_mlfqs) mfqls_timer_callback(ticks);
+
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer

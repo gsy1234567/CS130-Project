@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include <lib/kernel/fix_point.h>
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -119,6 +120,9 @@ struct thread
 
     struct Priority_Donate_Info priority_donate_info;
 
+    int32_t nice;
+    fixed_t recent_cpu;
+
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
@@ -192,5 +196,7 @@ void donate_priority(struct Priority_Donate_Receive_Info* receive_info, struct t
 void release_priority(struct thread* t, struct lock* lk);
 
 int get_ready_list_highest_pri(void);
+
+void mfqls_timer_callback(int64_t ticks);
 
 #endif /* threads/thread.h */

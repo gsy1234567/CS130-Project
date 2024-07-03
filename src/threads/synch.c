@@ -206,7 +206,7 @@ lock_acquire (struct lock *lock)
   struct Priority_Donate_Receive_Info donate_info;
 
   if(!lock_try_acquire(lock)) {
-      donate_priority(&donate_info, cur, lock->holder, lock);
+      if(!thread_mlfqs) donate_priority(&donate_info, cur, lock->holder, lock);
       sema_down(&lock->semaphore);
       lock->holder = thread_current ();
   }
@@ -243,7 +243,7 @@ lock_release (struct lock *lock)
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
   struct thread* cur = thread_current();
-  release_priority(cur, lock);
+  if(!thread_mlfqs) release_priority(cur, lock);
   lock->holder = NULL;
   sema_up (&lock->semaphore);
 }

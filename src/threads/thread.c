@@ -11,6 +11,7 @@
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "devices/timer.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -58,6 +59,7 @@ static unsigned thread_ticks;   /* # of timer ticks since last yield. */
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
 bool thread_mlfqs;
+static fixed_t load_avg;
 
 static void kernel_thread (thread_func *, void *aux);
 
@@ -70,6 +72,64 @@ static void *alloc_frame (struct thread *, size_t size);
 static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
+static bool is_valid_nice(int32_t nice);
+
+static int calc_mlfqs_priority(const struct thread* t) {
+    ASSERT(thread_mlfqs);
+    ASSERT(is_thread(t));
+    int ret = 0;
+
+    ret = FP_ROUND_NEAREST(
+      FP_SUB(
+        FP_SUB(
+          FP_CONSTANT(PRI_MAX), 
+          FP_DIV_INT(t->recent_cpu, 4)
+        ), 
+        FP_CONSTANT(t->nice * 2)
+      )
+    );
+
+    if(ret > PRI_MAX) ret = PRI_MAX;
+    if(ret < PRI_MIN) ret = PRI_MIN;
+    return ret;
+}
+
+static fixed_t calc_mlfqs_recent_cpu(const struct thread* t) {
+    return 
+      FP_ADD_INT(
+        FP_MUL(
+          FP_DIV(
+            FP_MUL_INT(load_avg, 2), 
+            FP_ADD_INT(
+              FP_MUL_INT(load_avg, 2),
+              1
+            )
+          ),
+          t->recent_cpu
+        ),
+        t->nice
+      );
+}
+
+static fixed_t calc_mlfqs_load_avg(void) {
+    struct thread* cur = thread_current();
+    int ready_threads = list_size(&ready_list);
+    if(cur != idle_thread) ++ready_threads;
+
+    return FP_ADD(
+      FP_MUL(
+        FP_DIV(
+          FP_CONSTANT(59), 
+          FP_CONSTANT(60)
+        ), 
+        load_avg
+      ), 
+      FP_DIV_INT(
+        FP_CONSTANT(ready_threads), 
+        60
+      )
+    );
+}
 
 /* Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
@@ -92,6 +152,7 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
+  load_avg = FP_CONSTANT(0);
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -201,7 +262,7 @@ thread_create (const char *name, int priority,
   /* Add to run queue. */
   thread_unblock (t);
 
-  if(t->priority > thread_current()->priority) 
+  if(any_thread_get_priority(t) > any_thread_get_priority(thread_current())); 
       thread_yield();
 
   return tid;
@@ -240,6 +301,7 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
+  if(thread_mlfqs) t->priority = calc_mlfqs_priority(t);
   list_insert_ordered(&ready_list, &t->elem, &priority_larger_func, NULL);
   t->status = THREAD_READY;
   intr_set_level (old_level);
@@ -338,18 +400,7 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
-    enum intr_level old_level;
-
-    old_level = intr_disable();
     any_thread_set_priority(thread_current(), new_priority);
-    if(
-      !list_empty(&ready_list) && 
-      any_thread_get_priority(list_entry(list_front(&ready_list), struct thread, elem)) 
-        > 
-      new_priority) {
-        thread_yield();
-    }
-    intr_set_level(old_level);
 }
 
 /* Returns the current thread's priority. */
@@ -361,33 +412,48 @@ thread_get_priority (void)
 
 /* Sets the current thread's nice value to NICE. */
 void
-thread_set_nice (int nice UNUSED) 
+thread_set_nice (int nice) 
 {
-  /* Not yet implemented. */
+    struct thread* cur = thread_current();
+    ASSERT(thread_mlfqs);
+    ASSERT(is_valid_nice(cur->nice));
+    cur->nice = nice;
+    any_thread_set_priority(cur, calc_mlfqs_priority(cur));
 }
 
 /* Returns the current thread's nice value. */
 int
 thread_get_nice (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+    const struct thread* cur = thread_current();
+    ASSERT(thread_mlfqs);
+    ASSERT(is_valid_nice(cur->nice));
+    return cur->nice;
 }
 
 /* Returns 100 times the system load average. */
 int
 thread_get_load_avg (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  return FP_ROUND_NEAREST(
+    FP_MUL_INT(
+      load_avg,
+      100
+    )
+  );
 }
 
 /* Returns 100 times the current thread's recent_cpu value. */
 int
 thread_get_recent_cpu (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  const struct thread* cur = thread_current();
+  return FP_ROUND_NEAREST(
+    FP_MUL_INT(
+      cur->recent_cpu,
+      100
+    )
+  );
 }
 
 /* Idle thread.  Executes when no other thread is ready to run.
@@ -477,7 +543,20 @@ init_thread (struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->wake_up = 0;
-  priority_donate_info_init(&t->priority_donate_info);
+  if(!thread_mlfqs) priority_donate_info_init(&t->priority_donate_info);
+
+  if(thread_mlfqs) {
+    if(!strcmp(name, "main")) {
+        t->nice = 0;
+        t->recent_cpu = FP_CONSTANT(0);
+    } else {
+        struct thread* cur = thread_current();
+        t->nice = cur->nice;
+        t->recent_cpu = cur->recent_cpu;
+        ASSERT(is_valid_nice(t->nice));
+    }
+  }
+
   t->magic = THREAD_MAGIC;
 
   old_level = intr_disable ();
@@ -602,6 +681,7 @@ uint32_t thread_stack_ofs = offsetof (struct thread, stack);
 // Priority Donation Interface //
 
 bool priority_donate_receive_info_larger_func(const struct list_elem* lhs, const struct list_elem* rhs, void* aux UNUSED) {
+    ASSERT(!thread_mlfqs);
     return 
       list_entry(lhs, const struct Priority_Donate_Receive_Info, elem)->priority >
       list_entry(rhs, const struct Priority_Donate_Receive_Info, elem)->priority;
@@ -609,11 +689,13 @@ bool priority_donate_receive_info_larger_func(const struct list_elem* lhs, const
 
 void priority_donate_info_init(struct Priority_Donate_Info* info) {
     ASSERT(info != NULL);
+    ASSERT(!thread_mlfqs);
     info->donate_to = NULL;
     list_init(&info->receive_info);
 } 
 
 int get_donated_priority(const struct Priority_Donate_Info* info) {
+    ASSERT(!thread_mlfqs);
     int ret = PRI_MIN;
 
     if(!list_empty(&info->receive_info)) {
@@ -624,11 +706,12 @@ int get_donated_priority(const struct Priority_Donate_Info* info) {
 }
 
 static bool _priority_donate_receive_info_equal(const struct list_elem* i, void* aux UNUSED) {
+    ASSERT(!thread_mlfqs);
     return list_entry(i, const struct Priority_Donate_Receive_Info, elem)->receive_from == aux;
 }
 
 void update_priority(struct thread* donator) {
-
+    ASSERT(!thread_mlfqs);
     while(donator != NULL) {
         struct thread* receiver = donator->priority_donate_info.donate_to;
 
@@ -671,6 +754,7 @@ void donate_priority(
   struct thread* to, 
   struct lock* lk
   ) {
+    ASSERT(!thread_mlfqs);
     receive_info->receive_from = from;
     receive_info->priority = any_thread_get_priority(from);
     receive_info->lk = lk;
@@ -686,7 +770,7 @@ int any_thread_get_priority(const struct thread* t) {
     int ret = t->priority;
     int donate_pri = 0;
 
-    if(!list_empty(&t->priority_donate_info.receive_info)) {
+    if(!list_empty(&t->priority_donate_info.receive_info) && !thread_mlfqs) {
         donate_pri = list_entry(
           list_front(&t->priority_donate_info.receive_info),
           const struct Priority_Donate_Receive_Info,
@@ -702,8 +786,16 @@ void any_thread_set_priority(struct thread* t, int new_priority) {
     int old_priority = any_thread_get_priority(t);
     t->priority = new_priority;
 
-    if(new_priority > old_priority) {
+    if(new_priority > old_priority && !thread_mlfqs) {
         update_priority(t);
+    }
+
+    if(
+      !list_empty(&ready_list) && 
+      any_thread_get_priority(list_entry(list_front(&ready_list), struct thread, elem)) 
+        > 
+      new_priority) {
+        thread_yield();
     }
 }
 
@@ -727,6 +819,7 @@ static bool _relate_to_lock(const struct list_elem* l, void* lock) {
 void release_priority(struct thread* t, struct lock* lk) {
     ASSERT(is_thread(t));
     ASSERT(lk != NULL);
+    ASSERT(!thread_mlfqs);
     ASSERT(t->priority_donate_info.donate_to == NULL);
     list_remove_if(&t->priority_donate_info.receive_info, &_relate_to_lock, lk);
 }
@@ -742,4 +835,41 @@ int get_ready_list_highest_pri(void) {
         );
     }
     return 0;
+}
+
+static bool is_valid_nice(int32_t nice) {
+    #define NICE_MIN -20
+    #define NICE_MAX 20
+
+    return (nice >= NICE_MIN) && (nice <= NICE_MAX);
+
+    #undef NICE_MIN
+    #undef NICE_MAX
+}
+
+void mfqls_timer_callback(int64_t ticks) {
+    ASSERT(thread_mlfqs);
+    struct thread* cur = thread_current();
+
+    if(cur != idle_thread) {
+        cur->recent_cpu = FP_ADD_INT(cur->recent_cpu, 1);
+    }
+
+    if(ticks % TIMER_FREQ == 0) {
+        load_avg = calc_mlfqs_load_avg();
+
+        for(struct list_elem* iter = list_begin(&all_list) ; 
+            iter != list_end(&all_list) ; 
+            iter = list_next(iter)) {
+            struct thread* t = list_entry(iter, struct thread, allelem);
+            t->recent_cpu = calc_mlfqs_recent_cpu(t);
+            t->priority = calc_mlfqs_priority(t);
+        }
+
+        list_sort(&ready_list, &priority_larger_func, NULL);
+    }
+  
+    if(ticks % 4 == 0 && cur != idle_thread) {
+        cur->priority = calc_mlfqs_priority(cur);
+    }
 }
