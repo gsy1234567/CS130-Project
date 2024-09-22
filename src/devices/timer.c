@@ -7,6 +7,7 @@
 #include "threads/interrupt.h"
 #include "threads/synch.h"
 #include "threads/thread.h"
+#include <list.h>
   
 /* See [8254] for hardware details of the 8254 timer chip. */
 
@@ -24,6 +25,11 @@ static int64_t ticks;
    Initialized by timer_calibrate(). */
 static unsigned loops_per_tick;
 
+static struct list timer_waiter_list;
+static bool timer_waiter_list_cmp_less_func(const struct list_elem *a,
+                                            const struct list_elem *b, 
+                                            void *aux);
+
 static intr_handler_func timer_interrupt;
 static bool too_many_loops (unsigned loops);
 static void busy_wait (int64_t loops);
@@ -37,6 +43,7 @@ timer_init (void)
 {
   pit_configure_channel (0, 2, TIMER_FREQ);
   intr_register_ext (0x20, timer_interrupt, "8254 Timer");
+  list_init(&timer_waiter_list);
 }
 
 /* Calibrates loops_per_tick, used to implement brief delays. */
@@ -90,10 +97,15 @@ void
 timer_sleep (int64_t ticks) 
 {
   int64_t start = timer_ticks ();
+  struct thread* cur = thread_current();
 
   ASSERT (intr_get_level () == INTR_ON);
-  while (timer_elapsed (start) < ticks) 
-    thread_yield ();
+  ASSERT (cur->wakeup == 0);
+  intr_disable();
+  cur->wakeup = start + ticks;
+  list_insert_ordered(&timer_waiter_list, &cur->elem, &timer_waiter_list_cmp_less_func, NULL);
+  thread_block();
+  intr_set_level(INTR_ON);
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -170,8 +182,26 @@ timer_print_stats (void)
 static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
+  int64_t time_curr;
+  enum intr_level old_level;
+  struct thread* waiter;
+
+  ASSERT(intr_context());
+
   ticks++;
   thread_tick ();
+
+  old_level = intr_disable();
+  time_curr = timer_ticks();
+  while(!list_empty(&timer_waiter_list)) {
+      waiter = list_entry(list_front(&timer_waiter_list), struct thread, elem);
+      if(time_curr >= waiter->wakeup) {
+        list_pop_front(&timer_waiter_list);
+        waiter->wakeup = 0;
+        thread_unblock(waiter);
+      } else break;
+  }
+  intr_set_level(old_level);
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer
@@ -243,4 +273,13 @@ real_time_delay (int64_t num, int32_t denom)
      the possibility of overflow. */
   ASSERT (denom % 1000 == 0);
   busy_wait (loops_per_tick * num / 1000 * TIMER_FREQ / (denom / 1000)); 
+}
+
+static bool timer_waiter_list_cmp_less_func(const struct list_elem *a,
+                                            const struct list_elem *b, 
+                                            void * aux UNUSED) 
+{
+    const struct thread* thread_a = list_entry(a, const struct thread, elem);
+    const struct thread* thread_b = list_entry(b, const struct thread, elem);
+    return thread_a->wakeup < thread_b->wakeup;
 }

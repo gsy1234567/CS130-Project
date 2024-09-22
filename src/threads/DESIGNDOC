@@ -1,0 +1,271 @@
+			+--------------------+
+			|        CS 140      |
+			| PROJECT 1: THREADS |
+			|   DESIGN DOCUMENT  |
+			+--------------------+
+				   
+---- GROUP ----
+
+Shuyuan Ge <geshy@shanghaitech.edu.cn>
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission, notes for the
+>> TAs, or extra credit, please give them here.
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+
+			     ALARM CLOCK
+			     ===========
+
+---- DATA STRUCTURES ----
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+- threads.h
+```c
+struct thread
+  {
+    /* Owned by thread.c. */
+    tid_t tid;                          /* Thread identifier. */
+    enum thread_status status;          /* Thread state. */
+    char name[16];                      /* Name (for debugging purposes). */
+    uint8_t *stack;                     /* Saved stack pointer. */
+    int priority;                       /* Priority. */
+    struct list_elem allelem;           /* List element for all threads list. */
+
+    /* Shared between thread.c and synch.c. */
+    struct list_elem elem;              /* List element. */
+    /*(+)*/int64_t wakeup;                     /* Wakeup time for a thread which will sleep. */
+
+#ifdef USERPROG
+    /* Owned by userprog/process.c. */
+    uint32_t *pagedir;                  /* Page directory. */
+#endif
+
+    /* Owned by thread.c. */
+    unsigned magic;                     /* Detects stack overflow. */
+  };
+```
+
+- timer.c
+```c
+/*(+)*/static struct list timer_waiter_list;
+/*(+)*/static bool timer_waiter_list_cmp_less_func(const struct list_elem *a,
+/*(+)*/                                            const struct list_elem *b, 
+/*(+)*/                                            void *aux);
+```
+
+---- ALGORITHMS ----
+
+- timer.c
+```c
+void
+timer_init (void) 
+{
+  pit_configure_channel (0, 2, TIMER_FREQ);
+  intr_register_ext (0x20, timer_interrupt, "8254 Timer");
+  /*(+)*/list_init(&timer_waiter_list);
+}
+
+void
+timer_sleep (int64_t ticks) 
+{
+  int64_t start = timer_ticks ();
+  /*(+)*/struct thread* cur = thread_current();
+
+  ASSERT (intr_get_level () == INTR_ON);
+  /*(-)*/while(timer_elapsed(start) < ticks)
+  /*(-)*/	thread_yield();
+  /*(+)*/ASSERT (cur->wakeup == 0);
+  /*(+)*/intr_disable();
+  /*(+)*/cur->wakeup = start + ticks;
+  /*(+)*/list_insert_ordered(&timer_waiter_list, &cur->elem, &timer_waiter_list_cmp_less_func, NULL);
+  /*(+)*/thread_block();
+  /*(+)*/intr_set_level(INTR_ON);
+}
+
+static void
+timer_interrupt (struct intr_frame *args UNUSED)
+{
+  /*(+)*/int64_t time_curr;
+  /*(+)*/enum intr_level old_level;
+  /*(+)*/struct thread* waiter;
+
+  /*(+)*/ASSERT(intr_context());
+
+  ticks++;
+  thread_tick ();
+
+  /*(+)*/old_level = intr_disable();
+  /*(+)*/time_curr = timer_ticks();
+  /*(+)*/while(!list_empty(&timer_waiter_list)) {
+  /*(+)*/    waiter = list_entry(list_front(&timer_waiter_list), struct thread, elem);
+  /*(+)*/    if(time_curr >= waiter->wakeup) {
+  /*(+)*/      list_pop_front(&timer_waiter_list);
+  /*(+)*/      waiter->wakeup = 0;
+  /*(+)*/      thread_unblock(waiter);
+  /*(+)*/    } else break;
+  /*(+)*/}
+  /*(+)*/intr_set_level(old_level);
+}
+
+/*(+)*/static bool timer_waiter_list_cmp_less_func(const struct list_elem *a,
+/*(+)*/                                            const struct list_elem *b, 
+/*(+)*/                                            void * aux UNUSED) 
+/*(+)*/{
+/*(+)*/    const struct thread* thread_a = list_entry(a, const struct thread, elem);
+/*(+)*/    const struct thread* thread_b = list_entry(b, const struct thread, elem);
+/*(+)*/    return thread_a->wakeup < thread_b->wakeup;
+/*(+)*/}
+```
+
+>> A2: Briefly describe what happens in a call to timer_sleep(),
+>> including the effects of the timer interrupt handler.
+
+> When I call timer_sleep(), I do the following things:
+>1. Calculate the wake up time for the current thread.
+>2. Push the current thread into a less priority queue according to the wake up time.
+>3. Block the current thread.
+---
+> When timer_interrupt() is called, I do the following loops:
+>1. Check if the first thread in the less priority queue should be waken up if the priority queue is not empty.
+>- [Yes] Unblock it, move to step `1`.
+>- [No] Break the loop.
+
+>> A3: What steps are taken to minimize the amount of time spent in
+>> the timer interrupt handler?
+
+> Because timer_interrupt() is called thousands of times in one second, it is important to minimize the time complexity of it. I use a priority queue so that the step finding the earliest thread should be waken up costs $O(1)$ time instead of trveral all the list to find all the threads should be waken up which costs $\Theta(N)$ time (where N is the length of the list).
+
+---- SYNCHRONIZATION ----
+
+>> A4: How are race conditions avoided when multiple threads call
+>> timer_sleep() simultaneously?
+
+>I call thread_block() after inserting the thread into the priority queue to avoid racing conditions between multiple timer_sleep() callings.
+
+>> A5: How are race conditions avoided when a timer interrupt occurs
+>> during a call to timer_sleep()?
+
+> I turn off the interrupt to avoid racing conditions between kernel thread and interrupt.
+
+---- RATIONALE ----
+
+>> A6: Why did you choose this design?  In what ways is it superior to
+>> another design you considered?
+
+> I wanted to minimize the time complexity of timer_interrupt(). This design costs $O(M)$ times instead of $\Theta(N)$ time, where $M$ is the number of threads should be waken up at this time tick, $N$ is the number of all threads should be waken up or should keep sleeping and usually $M << N$.
+
+			 PRIORITY SCHEDULING
+			 ===================
+
+---- DATA STRUCTURES ----
+
+>> B1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+>> B2: Explain the data structure used to track priority donation.
+>> Use ASCII art to diagram a nested donation.  (Alternately, submit a
+>> .png file.)
+
+---- ALGORITHMS ----
+
+>> B3: How do you ensure that the highest priority thread waiting for
+>> a lock, semaphore, or condition variable wakes up first?
+
+>> B4: Describe the sequence of events when a call to lock_acquire()
+>> causes a priority donation.  How is nested donation handled?
+
+>> B5: Describe the sequence of events when lock_release() is called
+>> on a lock that a higher-priority thread is waiting for.
+
+---- SYNCHRONIZATION ----
+
+>> B6: Describe a potential race in thread_set_priority() and explain
+>> how your implementation avoids it.  Can you use a lock to avoid
+>> this race?
+
+---- RATIONALE ----
+
+>> B7: Why did you choose this design?  In what ways is it superior to
+>> another design you considered?
+
+			  ADVANCED SCHEDULER
+			  ==================
+
+---- DATA STRUCTURES ----
+
+>> C1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+---- ALGORITHMS ----
+
+>> C2: Suppose threads A, B, and C have nice values 0, 1, and 2.  Each
+>> has a recent_cpu value of 0.  Fill in the table below showing the
+>> scheduling decision and the priority and recent_cpu values for each
+>> thread after each given number of timer ticks:
+
+timer  recent_cpu    priority   thread
+ticks   A   B   C   A   B   C   to run
+-----  --  --  --  --  --  --   ------
+ 0
+ 4
+ 8
+12
+16
+20
+24
+28
+32
+36
+
+>> C3: Did any ambiguities in the scheduler specification make values
+>> in the table uncertain?  If so, what rule did you use to resolve
+>> them?  Does this match the behavior of your scheduler?
+
+>> C4: How is the way you divided the cost of scheduling between code
+>> inside and outside interrupt context likely to affect performance?
+
+---- RATIONALE ----
+
+>> C5: Briefly critique your design, pointing out advantages and
+>> disadvantages in your design choices.  If you were to have extra
+>> time to work on this part of the project, how might you choose to
+>> refine or improve your design?
+
+>> C6: The assignment explains arithmetic for fixed-point math in
+>> detail, but it leaves it open to you to implement it.  Why did you
+>> decide to implement it the way you did?  If you created an
+>> abstraction layer for fixed-point math, that is, an abstract data
+>> type and/or a set of functions or macros to manipulate fixed-point
+>> numbers, why did you do so?  If not, why not?
+
+			   SURVEY QUESTIONS
+			   ================
+
+Answering these questions is optional, but it will help us improve the
+course in future quarters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the quarter.
+
+>> In your opinion, was this assignment, or any one of the three problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+
+>> Is there some particular fact or hint we should give students in
+>> future quarters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students, either for future quarters or the remaining projects?
+
+>> Any other comments?
