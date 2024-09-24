@@ -522,3 +522,21 @@ list_min (struct list *list, list_less_func *less, void *aux)
     }
   return min;
 }
+
+int list_remove_if(struct list * list, list_judge_func * judger, void *aux) {
+    int removed = 0;
+    struct list_elem *iter = NULL;
+    for(iter = list_begin(list) ; iter != list_end(list) ; )
+      {
+        if(judger(iter, aux))
+          {
+            ++removed;
+            iter = list_remove(iter);
+          }
+        else
+          {
+            iter = list_next(iter);
+          }
+      }
+    return removed;
+}

@@ -113,11 +113,15 @@ sema_up (struct semaphore *sema)
   ASSERT (sema != NULL);
 
   old_level = intr_disable ();
-  if (!list_empty (&sema->waiters)) 
-    thread_unblock (list_entry (list_pop_front (&sema->waiters),
-                                struct thread, elem));
+  if (!list_empty (&sema->waiters))
+    {
+      struct list_elem *highest_priority = list_min(&sema->waiters, &ready_list_less_func, NULL);
+      list_remove(highest_priority);
+      thread_unblock(list_entry(highest_priority, struct thread, elem));
+    }
   sema->value++;
   intr_set_level (old_level);
+  thread_try_yield();
 }
 
 static void sema_test_helper (void *sema_);
@@ -196,8 +200,16 @@ lock_acquire (struct lock *lock)
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
 
-  sema_down (&lock->semaphore);
-  lock->holder = thread_current ();
+  enum intr_level old_level = intr_disable();
+  struct thread* cur = thread_current();
+  if(!sema_try_down(&lock->semaphore)) {
+    struct priority_inversion_item item;
+    priority_inversion_item_init(cur, lock, &item);
+    list_push_back(&lock->holder->priority_inversion_list, &item.elem);
+    sema_down(&lock->semaphore);
+  }
+  lock->holder = cur;
+  intr_set_level(old_level);
 }
 
 /* Tries to acquires LOCK and returns true if successful or false
@@ -220,6 +232,14 @@ lock_try_acquire (struct lock *lock)
   return success;
 }
 
+static bool priority_inversion_item_remove_judger(const struct list_elem* elem, 
+                                                  void *aux)
+  {
+    ASSERT(aux != NULL);
+    return list_entry(elem, const struct priority_inversion_item, elem)->lock 
+            ==  (struct lock*)aux;
+  }
+
 /* Releases LOCK, which must be owned by the current thread.
 
    An interrupt handler cannot acquire a lock, so it does not
@@ -228,11 +248,17 @@ lock_try_acquire (struct lock *lock)
 void
 lock_release (struct lock *lock) 
 {
+  struct thread* cur;
+  enum intr_level old_level;
+
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
-
+  old_level = intr_disable();
+  cur = thread_current();
   lock->holder = NULL;
-  sema_up (&lock->semaphore);
+  list_remove_if(&cur->priority_inversion_list, &priority_inversion_item_remove_judger, (void*)lock);
+  sema_up(&lock->semaphore);
+  intr_set_level(old_level);
 }
 
 /* Returns true if the current thread holds LOCK, false
@@ -251,6 +277,7 @@ struct semaphore_elem
   {
     struct list_elem elem;              /* List element. */
     struct semaphore semaphore;         /* This semaphore. */
+    struct thread* holder;
   };
 
 /* Initializes condition variable COND.  A condition variable
@@ -295,11 +322,21 @@ cond_wait (struct condition *cond, struct lock *lock)
   ASSERT (lock_held_by_current_thread (lock));
   
   sema_init (&waiter.semaphore, 0);
+  waiter.holder = thread_current();
   list_push_back (&cond->waiters, &waiter.elem);
   lock_release (lock);
   sema_down (&waiter.semaphore);
   lock_acquire (lock);
 }
+
+static bool semaphore_elem_less_func(const struct list_elem *a, const struct list_elem *b, void *aux UNUSED)
+  {
+    return get_priority(
+      list_entry(a, struct semaphore_elem, elem)->holder
+    ) > get_priority(
+      list_entry(b, struct semaphore_elem, elem)->holder
+    );
+  }
 
 /* If any threads are waiting on COND (protected by LOCK), then
    this function signals one of them to wake up from its wait.
@@ -316,9 +353,12 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED)
   ASSERT (!intr_context ());
   ASSERT (lock_held_by_current_thread (lock));
 
-  if (!list_empty (&cond->waiters)) 
-    sema_up (&list_entry (list_pop_front (&cond->waiters),
-                          struct semaphore_elem, elem)->semaphore);
+  if (!list_empty (&cond->waiters))
+    {
+      struct list_elem *highest_priority = list_min(&cond->waiters, &semaphore_elem_less_func, NULL);
+      list_remove(highest_priority);
+      sema_up(&list_entry(highest_priority, struct semaphore_elem, elem)->semaphore);
+    }
 }
 
 /* Wakes up all threads, if any, waiting on COND (protected by

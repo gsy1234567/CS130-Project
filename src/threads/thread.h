@@ -24,6 +24,26 @@ typedef int tid_t;
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
 
+/* Structure to store information about priority inversion. */
+struct priority_inversion_item
+  {
+    struct thread* donator;
+    struct lock*   lock;
+    struct list_elem elem;
+  };
+
+void priority_inversion_item_init(
+   struct thread* t, 
+   struct lock* lock, 
+   struct priority_inversion_item* item
+);
+
+bool ready_list_less_func(
+  const struct list_elem *a, 
+  const struct list_elem *b, 
+  void *aux
+);
+
 /* A kernel thread or user process.
 
    Each thread structure is stored in its own 4 kB page.  The
@@ -92,6 +112,7 @@ struct thread
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
+    struct list      priority_inversion_list;
     int64_t wakeup;                     /* Wakeup time for a thread which will sleep. */
 
 #ifdef USERPROG
@@ -108,6 +129,7 @@ struct thread
    Controlled by kernel command-line option "-o mlfqs". */
 extern bool thread_mlfqs;
 
+bool is_thread (const struct thread *);
 void thread_init (void);
 void thread_start (void);
 
@@ -132,7 +154,9 @@ typedef void thread_action_func (struct thread *t, void *aux);
 void thread_foreach (thread_action_func *, void *);
 
 int thread_get_priority (void);
+int get_priority(const struct thread* t);
 void thread_set_priority (int);
+void thread_try_yield(void);
 
 int thread_get_nice (void);
 void thread_set_nice (int);
