@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "fix_point.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -43,6 +44,8 @@ bool ready_list_less_func(
   const struct list_elem *b, 
   void *aux
 );
+
+
 
 /* A kernel thread or user process.
 
@@ -162,5 +165,9 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+
+int calc_priority(fp1714_t recent_cpu, int nice);
+fp1714_t update_recent_cpu(fp1714_t load_avg, fp1714_t recent_cpu, int nice);
+fp1714_t update_load_avg(fp1714_t old_load_avg, int ready_threads);
 
 #endif /* threads/thread.h */

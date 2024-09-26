@@ -658,4 +658,48 @@ void thread_try_yield()
   intr_set_level(old_level);
 }
 
+int calc_priority(fp1714_t recent_cpu, int nice)  {
+    int ret = round_to_zero(
+                fp_int_sub(
+                    fp2_sub(
+                        to_fix_point(PRI_MAX), 
+                        fp_int_div(
+                            recent_cpu, 
+                            4
+                        )
+                    ), 
+                    nice * 2
+                )
+            );
+    ASSERT(ret <= PRI_MAX);
+    return ret > 0 ? ret : 0;
+}
 
+fp1714_t update_recent_cpu(fp1714_t load_avg, fp1714_t recent_cpu, int nice) {
+    return fp_int_add(
+        fp2_mul(
+            fp2_div(
+                fp_int_mul(load_avg, 2), 
+                fp_int_add(fp_int_mul(load_avg, 2), 1)
+            ),
+            recent_cpu
+        ),
+        nice
+    );
+}
+
+fp1714_t update_load_avg(fp1714_t old_load_avg, int ready_threads) {
+    return fp2_add(
+        fp2_mul(
+            fp_int_div(
+                to_fix_point(59), 
+                60
+            ), 
+            old_load_avg
+        ), 
+        fp_int_div(
+            to_fix_point(ready_threads), 
+            60
+        )
+    );
+}
