@@ -118,6 +118,9 @@ struct thread
     struct list      priority_inversion_list;
     int64_t wakeup;                     /* Wakeup time for a thread which will sleep. */
 
+    int nice;
+    fp1714_t  recent_cpu;
+
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
@@ -131,6 +134,7 @@ struct thread
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
 extern bool thread_mlfqs;
+extern struct thread *idle_thread;
 
 bool is_thread (const struct thread *);
 void thread_init (void);
@@ -165,9 +169,5 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
-
-int calc_priority(fp1714_t recent_cpu, int nice);
-fp1714_t update_recent_cpu(fp1714_t load_avg, fp1714_t recent_cpu, int nice);
-fp1714_t update_load_avg(fp1714_t old_load_avg, int ready_threads);
 
 #endif /* threads/thread.h */

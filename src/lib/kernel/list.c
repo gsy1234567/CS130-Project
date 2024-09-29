@@ -540,3 +540,13 @@ int list_remove_if(struct list * list, list_judge_func * judger, void *aux) {
       }
     return removed;
 }
+
+void list_foreach(struct list *list, list_foreach_func func, void *aux)
+  {
+    for(struct list_elem *iter = list_begin(list) ; 
+        iter != list_end(list) ; 
+        iter = list_next(iter))
+      {
+        func(iter, aux);
+      }
+  }

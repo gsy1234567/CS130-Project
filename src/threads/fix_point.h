@@ -2,6 +2,8 @@
 
 #include <stdint.h>
 
+#include <stdint.h>
+
 typedef int32_t fp1714_t;
 fp1714_t to_fix_point(int32_t n);
 int round_to_zero(fp1714_t x);

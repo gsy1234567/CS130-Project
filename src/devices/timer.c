@@ -7,6 +7,8 @@
 #include "threads/interrupt.h"
 #include "threads/synch.h"
 #include "threads/thread.h"
+#include "threads/fix_point.h"
+#include "threads/bsd_scheduler.h"
 #include <list.h>
   
 /* See [8254] for hardware details of the 8254 timer chip. */
@@ -193,6 +195,7 @@ timer_interrupt (struct intr_frame *args UNUSED)
 
   old_level = intr_disable();
   time_curr = timer_ticks();
+
   while(!list_empty(&timer_waiter_list)) {
       waiter = list_entry(list_front(&timer_waiter_list), struct thread, elem);
       if(time_curr >= waiter->wakeup) {
@@ -201,6 +204,10 @@ timer_interrupt (struct intr_frame *args UNUSED)
         thread_unblock(waiter);
       } else break;
   }
+  if(thread_mlfqs)
+    {
+      bsd_timer_callback(time_curr);
+    }
   intr_set_level(old_level);
 }
 

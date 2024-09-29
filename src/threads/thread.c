@@ -11,6 +11,7 @@
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
+#include "threads/bsd_scheduler.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -19,6 +20,9 @@
    Used to detect stack overflow.  See the big comment at the top
    of thread.h for details. */
 #define THREAD_MAGIC 0xcd6abf4b
+
+#define MIN(x, y) (((x) < (y)) ? (x) : (y))
+#define MAX(x, y) (((x) > (y)) ? (x) : (y))
 
 /* List of processes in THREAD_READY state, that is, processes
    that are ready to run but not actually running. */
@@ -29,7 +33,7 @@ static struct list ready_list;
 static struct list all_list;
 
 /* Idle thread. */
-static struct thread *idle_thread;
+struct thread *idle_thread;
 
 /* Initial thread, the thread running init.c:main(). */
 static struct thread *initial_thread;
@@ -92,6 +96,11 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
+
+  if(thread_mlfqs)
+    {
+      bsd_scheduler_init();
+    }
 
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
@@ -238,7 +247,14 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
-  list_insert_ordered (&ready_list, &t->elem, &ready_list_less_func, NULL);
+  if(!thread_mlfqs)
+    {
+      list_insert_ordered (&ready_list, &t->elem, &ready_list_less_func, NULL);
+    }
+  else  
+    {
+      bsd_scheduler_insert(&t->elem, t->priority);
+    }
   t->status = THREAD_READY;
   intr_set_level (old_level);
 }
@@ -308,8 +324,18 @@ thread_yield (void)
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
-  if (cur != idle_thread) 
-    list_insert_ordered(&ready_list, &cur->elem, &ready_list_less_func, NULL);
+  if(cur != idle_thread)
+    {
+      if(!thread_mlfqs)
+        {
+          list_insert_ordered(&ready_list, &cur->elem, &ready_list_less_func, NULL);
+        }
+      else
+        {
+          bsd_scheduler_insert(&cur->elem, cur->priority);
+        }
+    }
+
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
@@ -344,38 +370,70 @@ thread_set_priority (int new_priority)
 int
 thread_get_priority (void) 
 {
-  return get_priority(thread_current());
+  int ret = -1;
+  enum intr_level old_level = intr_disable();
+  struct thread *cur = thread_current();
+  if(thread_mlfqs)
+    {
+      ret = cur->priority;
+    }
+  else
+    {
+      ret = get_priority(thread_current());
+    }
+  intr_set_level(old_level);
+  ASSERT(PRI_MIN <= ret && ret <= PRI_MAX);
+  return ret;
 }
 
 /* Sets the current thread's nice value to NICE. */
 void
-thread_set_nice (int nice UNUSED) 
+thread_set_nice (int nice) 
 {
-  /* Not yet implemented. */
+  ASSERT(thread_mlfqs);
+  ASSERT(-20 <= nice && nice <= 20);
+  enum intr_level old_level = intr_disable();
+  struct thread *cur = thread_current();
+  cur->nice = nice;
+  cur->priority = bsd_update_priority(cur->recent_cpu, cur->nice);
+  intr_set_level(old_level);
+  thread_try_yield();
 }
 
 /* Returns the current thread's nice value. */
 int
 thread_get_nice (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  ASSERT(thread_mlfqs);
+  int ret = 0;
+  enum intr_level old_level = intr_disable();
+  ret = thread_current()->nice;
+  intr_set_level(old_level);
+  return ret;
 }
 
 /* Returns 100 times the system load average. */
 int
 thread_get_load_avg (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  return round_to_nearest(
+    fp_int_mul(
+      bsd_get_load_avg(), 
+      100
+    )
+  );
 }
 
 /* Returns 100 times the current thread's recent_cpu value. */
 int
 thread_get_recent_cpu (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  return round_to_nearest(
+    fp_int_mul(
+      thread_current()->recent_cpu, 
+      100
+    )
+  );
 }
 
 /* Idle thread.  Executes when no other thread is ready to run.
@@ -465,7 +523,24 @@ init_thread (struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
-  list_init(&t->priority_inversion_list);
+
+  if(thread_mlfqs)
+    {
+      if(t == initial_thread)
+        {
+          t->nice = 0;
+          t->recent_cpu = to_fix_point(0);
+        }
+      else
+        {
+          t->nice = thread_current()->nice;
+          t->recent_cpu = thread_current()->recent_cpu;
+        }
+    }
+  else
+    {
+      list_init(&t->priority_inversion_list);
+    }
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
@@ -493,10 +568,22 @@ alloc_frame (struct thread *t, size_t size)
 static struct thread *
 next_thread_to_run (void) 
 {
-  if (list_empty (&ready_list))
-    return idle_thread;
+  struct thread *ret = idle_thread;
+  if(thread_mlfqs)
+    {
+      if(!bsd_scheduler_empty())
+        {
+          ret = list_entry(bsd_scheduler_pop(), struct thread, elem);
+        }
+    }
   else
-    return list_entry (list_pop_front (&ready_list), struct thread, elem);
+    {
+      if(!list_empty(&ready_list))
+        {
+          ret = list_entry(list_pop_front(&ready_list), struct thread, elem);
+        }
+    }
+  return ret;
 }
 
 /* Completes a thread switch by activating the new thread's page
@@ -634,72 +721,43 @@ static int get_donated_priority(const struct thread* t)
 int get_priority(const struct thread* t)
 {
   ASSERT(is_thread(t));
-
-  int origin_priority = t->priority;
-  int donated_priority = get_donated_priority(t);
-  return origin_priority > donated_priority ? origin_priority : donated_priority;
+  int ret = t->priority;
+  if(!thread_mlfqs)
+    {
+      int donated_priority = get_donated_priority(t);
+      ret = MAX(ret, donated_priority);
+    }
+  return ret;
 }
 
 void thread_try_yield()
 {
   enum intr_level old_level = intr_disable();
-  if(!list_empty(&ready_list)) {
-    int cur_priority = thread_get_priority();
-    int ready_list_highest_priority = get_priority(
-      list_entry(
-        list_front(&ready_list), 
-        struct thread, 
-        elem
-      )
-    );
-    if(cur_priority < ready_list_highest_priority)
-      thread_yield();
-  }
+  if(thread_mlfqs)
+    {
+      if(!bsd_scheduler_empty())
+        {
+          if(thread_current()->priority < (int)bsd_next_highest_priority())
+            {
+              thread_yield();
+            }
+        }
+    }
+  else
+    {
+      if(!list_empty(&ready_list)) {
+        int cur_priority = thread_get_priority();
+        int ready_list_highest_priority = get_priority(
+          list_entry(
+            list_front(&ready_list), 
+            struct thread, 
+            elem
+          )
+        );
+        if(cur_priority < ready_list_highest_priority)
+          thread_yield();
+      }
+    }
+
   intr_set_level(old_level);
-}
-
-int calc_priority(fp1714_t recent_cpu, int nice)  {
-    int ret = round_to_zero(
-                fp_int_sub(
-                    fp2_sub(
-                        to_fix_point(PRI_MAX), 
-                        fp_int_div(
-                            recent_cpu, 
-                            4
-                        )
-                    ), 
-                    nice * 2
-                )
-            );
-    ASSERT(ret <= PRI_MAX);
-    return ret > 0 ? ret : 0;
-}
-
-fp1714_t update_recent_cpu(fp1714_t load_avg, fp1714_t recent_cpu, int nice) {
-    return fp_int_add(
-        fp2_mul(
-            fp2_div(
-                fp_int_mul(load_avg, 2), 
-                fp_int_add(fp_int_mul(load_avg, 2), 1)
-            ),
-            recent_cpu
-        ),
-        nice
-    );
-}
-
-fp1714_t update_load_avg(fp1714_t old_load_avg, int ready_threads) {
-    return fp2_add(
-        fp2_mul(
-            fp_int_div(
-                to_fix_point(59), 
-                60
-            ), 
-            old_load_avg
-        ), 
-        fp_int_div(
-            to_fix_point(ready_threads), 
-            60
-        )
-    );
 }

@@ -202,12 +202,19 @@ lock_acquire (struct lock *lock)
 
   enum intr_level old_level = intr_disable();
   struct thread* cur = thread_current();
-  if(!sema_try_down(&lock->semaphore)) {
-    struct priority_inversion_item item;
-    priority_inversion_item_init(cur, lock, &item);
-    list_push_back(&lock->holder->priority_inversion_list, &item.elem);
-    sema_down(&lock->semaphore);
-  }
+  if(thread_mlfqs)
+    {
+      sema_down(&lock->semaphore);
+    }
+  else
+    {
+      if(!sema_try_down(&lock->semaphore)) {
+        struct priority_inversion_item item;
+        priority_inversion_item_init(cur, lock, &item);
+        list_push_back(&lock->holder->priority_inversion_list, &item.elem);
+        sema_down(&lock->semaphore);
+      }
+    }
   lock->holder = cur;
   intr_set_level(old_level);
 }
@@ -256,7 +263,10 @@ lock_release (struct lock *lock)
   old_level = intr_disable();
   cur = thread_current();
   lock->holder = NULL;
-  list_remove_if(&cur->priority_inversion_list, &priority_inversion_item_remove_judger, (void*)lock);
+  if(!thread_mlfqs)
+    {
+      list_remove_if(&cur->priority_inversion_list, &priority_inversion_item_remove_judger, (void*)lock);
+    }
   sema_up(&lock->semaphore);
   intr_set_level(old_level);
 }
