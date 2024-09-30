@@ -48,6 +48,9 @@ $(foreach prog,$(PROGS),$(eval $(prog).output: $(prog)))
 $(foreach test,$(TESTS),$(eval $(test).output: $($(test)_PUTFILES)))
 $(foreach test,$(TESTS),$(eval $(test).output: TEST = $(test)))
 $(foreach test,$(TESTS),$(eval $(test).result: $(test).output $(test).ck))
+$(foreach prog,$(PROGS),$(eval $(prog).debug: $(prog)))
+$(foreach test,$(TESTS),$(eval $(test).debug: $($(test)_PUTFILES)))
+$(foreach test,$(TESTS),$(eval $(test).debug: TEST = $(test)))
 
 # Prevent an environment variable VERBOSE from surprising us.
 VERBOSE =
@@ -75,3 +78,33 @@ TESTCMD += 2> $(TEST).errors $(if $(VERBOSE),|tee,>) $(TEST).output
 
 %.result: %.ck %.output
 	perl -I$(SRCDIR) $< $* $@
+
+
+DEBUGCMD = pintos -v -k --gdb
+DEBUGCMD += $(SIMULATOR)
+DEBUGCMD += $(PINTOSOPTS)
+ifeq ($(filter userprog, $(KERNEL_SUBDIRS)), userprog)
+DEBUGCMD += $(FILESYSSOURCE)
+DEBUGCMD += $(foreach file,$(PUTFILES),-p $(file) -a $(notdir $(file)))
+endif
+ifeq ($(filter vm, $(KERNEL_SUBDIRS)), vm)
+DEBUGCMD += --swap-size=4
+endif
+DEBUGCMD += -- -q
+DEBUGCMD += $(KERNELFLAGS)
+ifeq ($(filter userprog, $(KERNEL_SUBDIRS)), userprog)
+DEBUGCMD += -f
+endif
+DEBUGCMD += $(if $($(TEST)_ARGS),run '$(*F) $($(TEST)_ARGS)',run $(*F))
+
+
+%.debug: kernel.bin loader.bin
+	rm -f .loadsymbols
+	for prog in $(PUTFILES); \
+		do objdump -h $$prog | \
+		awk -v prog=$$prog \
+			'BEGIN { pwd = ENVIRON["PWD"] } \
+			/.text/ \
+			{ print "add-symbol-file " pwd  "/" prog  " 0x"$$4 }' >> .loadsymbols; \
+	done
+	$(DEBUGCMD)

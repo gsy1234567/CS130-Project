@@ -1,0 +1,17 @@
+{
+  "files.associations": {
+    "Make*": "makefile",
+    "backtrace": "perl",
+    "pintos": "perl",
+    "pintos-gdb": "perl",
+    "pintos-mkdisk": "perl",
+    "pintos-set-cmdline": "perl",
+    "*.ck": "perl",
+    "*.h": "c",
+    "*.inc": "c",
+  },
+  "C_Cpp.formatting": "clangFormat",
+  "C_Cpp.clang_format_fallbackStyle": "GNU",
+  "editor.tabSize": 2,
+  "editor.formatOnSave": true
+}

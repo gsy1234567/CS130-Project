@@ -1,0 +1,142 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "[P1] Debug a Test",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/threads/build/kernel.o",
+      "preLaunchTask": "[P1] Run Test in GDB mode",
+      "miDebuggerServerAddress": "localhost:1234",
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}/src/threads/build",
+      "environment": [],
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        }
+      ],
+      "symbolLoadInfo": {
+        "loadAll": true,
+        "exceptionList": ""
+      }
+    },
+    {
+      "name": "[P2] Debug a Test",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/userprog/build/kernel.o",
+      "preLaunchTask": "[P2] Run Test in GDB mode",
+      "miDebuggerServerAddress": "localhost:1234",
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}/src/userprog/build",
+      "environment": [],
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        },
+        {
+          "description": "Load user symbols",
+          "text": "source ${workspaceFolder}/src/userprog/build/.loadsymbols",
+          "ignoreFailures": false
+        }
+      ],
+      "symbolLoadInfo": {
+        "loadAll": true,
+        "exceptionList": ""
+      }
+    },
+    {
+      "name": "[P3] Debug a Test",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/vm/build/kernel.o",
+      "preLaunchTask": "[P3] Run Test in GDB mode",
+      "miDebuggerServerAddress": "localhost:1234",
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}/src/vm/build",
+      "environment": [],
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        },
+        {
+          "text": "source ${workspaceFolder}/src/vm/build/.loadsymbols",
+          "description": "Import user program",
+          "ignoreFailures": false
+        }
+      ],
+      "symbolLoadInfo": {
+        "loadAll": true,
+        "exceptionList": ""
+      }
+    },
+    {
+      "name": "[P4] Debug a Test",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/src/filesys/build/kernel.o",
+      "preLaunchTask": "[P4] Run Test in GDB mode",
+      "miDebuggerServerAddress": "localhost:1234",
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}/src/filesys/build",
+      "environment": [],
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        },
+        {
+          "text": "source ${workspaceFolder}/src/filesys/build/.loadsymbols",
+          "description": "Import user program",
+          "ignoreFailures": false
+        }
+      ],
+      "symbolLoadInfo": {
+        "loadAll": true,
+        "exceptionList": ""
+      }
+    },
+    {
+      "name": "C/C++: gcc build and debug active file",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${fileDirname}/${fileBasenameNoExtension}",
+      "args": [],
+      "stopAtEntry": false,
+      "cwd": "${fileDirname}",
+      "environment": [],
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        },
+        {
+          "description": "Set Disassembly Flavor to Intel",
+          "text": "-gdb-set disassembly-flavor intel",
+          "ignoreFailures": true
+        }
+      ],
+      "preLaunchTask": "C/C++: gcc build active file",
+      "miDebuggerPath": "/usr/bin/gdb"
+    }
+  ]
+}
