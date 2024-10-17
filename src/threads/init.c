@@ -78,7 +78,7 @@ main (void)
 {
   char **argv;
 
-  /* Clear BSS. */  
+  /* Clear BSS. */
   bss_init ();
 
   /* Break command line into arguments and parse options. */

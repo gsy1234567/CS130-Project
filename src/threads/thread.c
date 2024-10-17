@@ -12,8 +12,10 @@
 #include "threads/synch.h"
 #include "threads/vaddr.h"
 #include "threads/bsd_scheduler.h"
+#include "threads/malloc.h"
 #ifdef USERPROG
 #include "userprog/process.h"
+#include "filesys/filesys.h"
 #endif
 
 /* Random value for struct thread's `magic' member.
@@ -190,6 +192,11 @@ thread_create (const char *name, int priority,
 
   /* Initialize thread. */
   init_thread (t, name, priority);
+
+#ifdef USERPROG
+  t->parent = thread_current();
+#endif
+
   tid = t->tid = allocate_tid ();
 
   /* Stack frame for kernel_thread(). */
@@ -318,12 +325,11 @@ thread_exit (void)
 void
 thread_yield (void) 
 {
-  struct thread *cur = thread_current ();
-  enum intr_level old_level;
-  
   ASSERT (!intr_context ());
 
-  old_level = intr_disable ();
+  enum intr_level old_level = intr_disable ();
+  struct thread *cur = thread_current ();
+
   if(cur != idle_thread)
     {
       if(!thread_mlfqs)
@@ -522,6 +528,16 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+
+#ifdef  USERPROG
+  lock_init(&t->lock);
+  cond_init(&t->cv);
+  list_init(&t->children_list);
+  list_init(&t->open_file_list);
+  t->fd_num = 2;
+
+#endif
+
   t->magic = THREAD_MAGIC;
 
   if(thread_mlfqs)
@@ -733,6 +749,8 @@ int get_priority(const struct thread* t)
 void thread_try_yield()
 {
   enum intr_level old_level = intr_disable();
+  if(intr_context())
+    return;
   if(thread_mlfqs)
     {
       if(!bsd_scheduler_empty())
@@ -761,3 +779,84 @@ void thread_try_yield()
 
   intr_set_level(old_level);
 }
+
+#ifdef USERPROG
+  #define UNUSED_FD 2
+
+  struct file_descriptor_pair {
+    struct list_elem elem;
+    struct file* file;
+    int fd;
+    
+  };
+  int allocate_fd(struct file *f) {
+    struct thread *cur = thread_current();
+    struct file_descriptor_pair *pair = NULL;
+    int ret = -1;
+    //allocate a new `file_descriptor_pair` to record <file, fd>
+    if(!f || !(pair = (struct file_descriptor_pair*)malloc(sizeof *pair)))
+      return ret;
+    pair->fd = ret = cur->fd_num;
+    pair->file = f;
+    //add it to the `open_file_list`
+    list_push_back(&cur->open_file_list, &pair->elem);
+    //update the `fd_num`
+    cur->fd_num = MAX(UNUSED_FD, cur->fd_num + 1);
+    return ret;
+  }
+
+  struct file* get_file(int fd) {
+    struct thread* cur = thread_current();
+    struct file_descriptor_pair *pair = NULL;
+    struct file *ret = NULL;
+    /* traverse the `open_file_list` to find `file` corresponding to `fd` */
+    for(struct list_elem *iter = list_begin(&cur->open_file_list) ; iter != list_end(&cur->open_file_list) ; iter = list_next(iter)) {
+      pair = list_entry(iter, struct file_descriptor_pair, elem);
+      if(pair->fd == fd) {
+        ret = pair->file;
+        break;
+      }
+    }
+    return ret;
+  }
+
+  bool destory_fd(int fd) {
+    bool exist = false;
+    struct thread *cur = thread_current();
+    struct file_descriptor_pair *pair = NULL;
+    //traverse the `open_file_list` to find `file` corresponding to `fd`
+    for(struct list_elem *iter = list_begin(&cur->open_file_list) ; iter != list_end(&cur->open_file_list) ; iter = list_next(iter)) {
+      pair = list_entry(iter, struct file_descriptor_pair, elem);
+      if(pair->fd == fd) {
+        list_remove(&pair->elem);
+        exist = true; 
+        break;
+      }
+    }
+    //if we find such a `file`
+    if(exist) {
+      filesys_lock_acquire();
+      file_close(pair->file);
+      filesys_lock_release();
+      free(pair);
+    }
+    return exist;
+  }
+
+int destory_all_fd(void)
+{
+  struct thread *cur = thread_current();
+  struct file_descriptor_pair *pair = NULL;
+  int closed = 0;
+
+  while(!list_empty(&cur->open_file_list)) {
+    pair = list_entry(list_pop_front(&cur->open_file_list), struct file_descriptor_pair, elem);
+    filesys_lock_acquire();
+    file_close(pair->file);
+    filesys_lock_release();
+    free(pair);
+    ++closed;
+  }
+  return closed;
+}
+#endif /* USERPROG */

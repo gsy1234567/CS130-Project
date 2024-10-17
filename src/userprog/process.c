@@ -17,52 +17,102 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "threads/synch.h"
+#include "threads/malloc.h"
+
+#define RANDOM_EXIT_CODE 114514
+#define MIN(x, y) ((x) < (y) ? (x) : (y))
+#define MAX(x, y) ((x) > (y) ? (x) : (y))
+
+struct SyncArgs {
+  int argc;
+  char* page_base;
+  char** argv;
+  struct semaphore sema;
+};
 
 static thread_func start_process NO_RETURN;
-static bool load (const char *cmdline, void (**eip) (void), void **esp);
+static bool load (const struct SyncArgs* sync_args, void (**eip) (void), void **esp);
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
    thread id, or TID_ERROR if the thread cannot be created. */
+
 tid_t
 process_execute (const char *file_name) 
 {
-  char *fn_copy;
   tid_t tid;
+  struct SyncArgs sync_args;
+
+  sync_args.argc = 0;
+  sync_args.page_base = (char*)palloc_get_page (0);
+  sema_init(&sync_args.sema, 0);
 
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
-  fn_copy = palloc_get_page (0);
-  if (fn_copy == NULL)
-    return TID_ERROR;
-  strlcpy (fn_copy, file_name, PGSIZE);
+
+  if (sync_args.page_base == NULL)
+    {
+      return TID_ERROR;
+    }
+  
+  strlcpy (sync_args.page_base, file_name, PGSIZE);
+
+  /* Reformat  cmd and calculate `argc`. */
+  char** argv = (char**)(sync_args.page_base + PGSIZE);
+  char *tmp = NULL;
+  *(--argv) = strtok_r(sync_args.page_base, " ", &tmp);
+  ++sync_args.argc;
+  while((*(--argv) = strtok_r(NULL, " ", &tmp))) ++sync_args.argc;
+  
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+
+  struct process_ret_frame *ret_frame = 
+    (struct process_ret_frame*)malloc(sizeof *ret_frame);
+  ret_frame->exit_code = RANDOM_EXIT_CODE;
+  ret_frame->finish = false;
+  lock_acquire(&thread_current()->lock);
+  tid = ret_frame->tid = thread_create (sync_args.page_base, PRI_DEFAULT, start_process, (void*)&sync_args);
+  list_push_front(&thread_current()->children_list, &ret_frame->elem);
+  lock_release(&thread_current()->lock);
   if (tid == TID_ERROR)
-    palloc_free_page (fn_copy); 
+    {
+      palloc_free_page ((void*)sync_args.page_base); 
+      list_remove(&ret_frame->elem);
+      free((void*)ret_frame);
+    }
+  else
+    {
+      sema_down(&sync_args.sema);
+      palloc_free_page((void*)sync_args.page_base);
+    }
   return tid;
 }
 
 /* A thread function that loads a user process and starts it
    running. */
 static void
-start_process (void *file_name_)
+start_process (void *args_info_)
 {
-  char *file_name = file_name_;
+  struct SyncArgs *args_info = args_info_;
   struct intr_frame if_;
   bool success;
+
+#ifdef USERPROG
+  thread_current()->is_user_process = true;
+#endif
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
-  success = load (file_name, &if_.eip, &if_.esp);
+  success = load (args_info, &if_.eip, &if_.esp);
 
   /* If load failed, quit. */
-  palloc_free_page (file_name);
+  sema_up(&args_info->sema);
   if (!success) 
     thread_exit ();
 
@@ -86,10 +136,34 @@ start_process (void *file_name_)
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid UNUSED) 
+process_wait (tid_t child_tid) 
 {
+  struct process_ret_frame *target_frame = NULL;
+  struct thread* cur = thread_current();
+  int ret = 0;
+  lock_acquire(&cur->lock);
+  for(struct list_elem *iter = list_begin(&cur->children_list) ; 
+                        iter != list_end(&cur->children_list) ; 
+                        iter = list_next(iter))
+    {
+      target_frame = list_entry(iter, struct process_ret_frame, elem);
+      if(target_frame->tid == child_tid)
+        goto found;
+    }
+  // if the child_tid is not valid
+  lock_release(&cur->lock);
   return -1;
+  found:
+  // if the child_tid is valid
+  while(!target_frame->finish)
+    {
+      cond_wait(&cur->cv, &cur->lock);
+    }
+  ret = target_frame->exit_code;
+  lock_release(&cur->lock);
+  return ret;
 }
+
 
 /* Free the current process's resources. */
 void
@@ -97,10 +171,56 @@ process_exit (void)
 {
   struct thread *cur = thread_current ();
   uint32_t *pd;
+  struct process_ret_frame *ret_frame = NULL;
+  
+  #ifdef USERPROG
 
+    struct process_ret_frame *cf;
+
+
+    for(struct list_elem *iter = list_begin(&cur->children_list) ; 
+                          iter != list_end(&cur->children_list) ; 
+                          iter = list_next(iter))
+      {
+        cf = list_entry(iter, struct process_ret_frame, elem);
+        if(!cf->finish) {
+          process_wait(cf->tid);
+          ASSERT(cf->finish);
+        }
+      }
+
+    while(!list_empty(&cur->children_list)) {
+      free(list_pop_front(&cur->children_list));
+    }
+    
+    if(cur->is_user_process)
+      {
+        lock_acquire(&cur->parent->lock);
+        for(struct list_elem *iter = list_begin(&cur->parent->children_list) ; 
+                              iter != list_end(&cur->parent->children_list) ; 
+                              iter = list_next(iter))
+          {
+            ret_frame = list_entry(iter, struct process_ret_frame, elem);
+            if(ret_frame->tid == cur->tid)
+              {
+                ret_frame->finish = true;
+                goto success;
+              }
+          }
+        PANIC("process_exit() could not find children through parent!");
+        success:
+        printf("%s: exit(%d)\n", cur->name, ret_frame->exit_code);
+        cond_signal(&cur->parent->cv, &cur->parent->lock);
+        lock_release(&cur->parent->lock);
+      }
+
+      //close all file this thread opened
+      destory_all_fd();
+  #endif
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = cur->pagedir;
+
   if (pd != NULL) 
     {
       /* Correct ordering here is crucial.  We must set
@@ -195,7 +315,7 @@ struct Elf32_Phdr
 #define PF_W 2          /* Writable. */
 #define PF_R 4          /* Readable. */
 
-static bool setup_stack (void **esp);
+static bool setup_stack (void **esp, const struct SyncArgs*);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
@@ -206,7 +326,7 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
    and its initial stack pointer into *ESP.
    Returns true if successful, false otherwise. */
 bool
-load (const char *file_name, void (**eip) (void), void **esp) 
+load (const struct SyncArgs* sync_args, void (**eip) (void), void **esp) 
 {
   struct thread *t = thread_current ();
   struct Elf32_Ehdr ehdr;
@@ -222,10 +342,10 @@ load (const char *file_name, void (**eip) (void), void **esp)
   process_activate ();
 
   /* Open executable file. */
-  file = filesys_open (file_name);
+  file = filesys_open (sync_args->page_base);
   if (file == NULL) 
     {
-      printf ("load: %s: open failed\n", file_name);
+      printf ("load: %s: open failed\n", sync_args->page_base);
       goto done; 
     }
 
@@ -238,7 +358,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
       || ehdr.e_phentsize != sizeof (struct Elf32_Phdr)
       || ehdr.e_phnum > 1024) 
     {
-      printf ("load: %s: error loading executable\n", file_name);
+      printf ("load: %s: error loading executable\n", sync_args->page_base);
       goto done; 
     }
 
@@ -302,7 +422,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
     }
 
   /* Set up stack. */
-  if (!setup_stack (esp))
+  if (!setup_stack (esp, sync_args))
     goto done;
 
   /* Start address. */
@@ -427,7 +547,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
 static bool
-setup_stack (void **esp) 
+setup_stack (void **esp, const struct SyncArgs* sync_args) 
 {
   uint8_t *kpage;
   bool success = false;
@@ -441,6 +561,41 @@ setup_stack (void **esp)
       else
         palloc_free_page (kpage);
     }
+  
+  //Push arguments into the user stack
+
+  //1>: copy arguments into the user stack
+  {
+    int strl;
+    char** argv = (char**)(sync_args->page_base + PGSIZE);
+    for(int i = sync_args->argc - 1 ; i >= 0 ; --i)
+      {
+        strl = strlen(*--argv);
+        *esp -= strl + 1;
+        memcpy(*esp, *argv, strl + 1);
+      }
+  }
+  char* argv_cur = *esp;
+  //2>: wold aligned
+  *esp =((uint32_t)(*esp) & 0xfffffffcU);
+  //3>: setting argv
+  *esp -= sizeof(char*) * (sync_args->argc + 1);
+  for(int i = sync_args->argc - 1 ; i >= 0 ; --i)
+    {
+      ((char**)*esp)[i] = argv_cur;
+      while(*(argv_cur++));
+    }
+  ((char**)*esp)[sync_args->argc] = NULL;
+  //4>: setting argv
+  *esp -= sizeof(char**);
+  *((char***)*esp) = (char**)(*esp) + 1;
+  //5>: setting argc
+  *esp -= sizeof(int);
+  *(int*)*esp = sync_args->argc;
+  //6>: setting fake return address
+  *esp -= sizeof(void*);
+  *(void**)*esp = NULL;
+
   return success;
 }
 

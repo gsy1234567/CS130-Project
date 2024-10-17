@@ -5,7 +5,10 @@
 #include <list.h>
 #include <stdint.h>
 #include "fix_point.h"
+#include "synch.h"
+#include "filesys/file.h"
 
+struct process_ret_frame;
 /* States in a thread's life cycle. */
 enum thread_status
   {
@@ -124,6 +127,18 @@ struct thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
+
+   /*For children.*/
+    bool is_user_process;  
+    struct thread* parent;
+    /*For parent.*/
+    struct lock lock;
+    struct condition cv;  
+    struct list children_list;
+    /*For file system*/
+    int fd_num;
+    struct list open_file_list;
+         
 #endif
 
     /* Owned by thread.c. */
@@ -169,5 +184,33 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+
+#ifdef USERPROG
+
+/**
+ * \brief Allocate a file descriptor for the given `f`.
+ * \return The file descriptor, -1 if any error happened.
+*/
+int allocate_fd(struct file* f);
+
+/**
+ * \brief Get the `file` `fd` mapped to.
+ * \return The file, NULL if any error happened. 
+*/
+struct file* get_file(int fd);
+
+/**
+ * \brief Close the file `fd` points to.
+ * \return True if `fd` exits, False otherwise.
+*/
+bool destory_fd(int fd);
+
+/**
+ * \brief Close all files current thread opened.
+ * \return The number of files closed.
+*/
+int destory_all_fd(void);
+
+#endif /* USERPROG */
 
 #endif /* threads/thread.h */

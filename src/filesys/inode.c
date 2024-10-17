@@ -6,6 +6,7 @@
 #include "filesys/filesys.h"
 #include "filesys/free-map.h"
 #include "threads/malloc.h"
+#include "threads/synch.h"
 
 /* Identifies an inode. */
 #define INODE_MAGIC 0x494e4f44
@@ -14,10 +15,10 @@
    Must be exactly BLOCK_SECTOR_SIZE bytes long. */
 struct inode_disk
   {
-    block_sector_t start;               /* First data sector. */
-    off_t length;                       /* File size in bytes. */
-    unsigned magic;                     /* Magic number. */
-    uint32_t unused[125];               /* Not used. */
+    block_sector_t start;               /* First data sector. */  /* 4bytes */
+    off_t length;                       /* File size in bytes. */ /* 4bytes */
+    unsigned magic;                     /* Magic number. */       /* 4bytes */
+    uint32_t unused[125];               /* Not used. */           /* 500bytes*/
   };
 
 /* Returns the number of sectors to allocate for an inode SIZE

@@ -89,8 +89,8 @@ kill (struct intr_frame *f)
       printf ("%s: dying due to interrupt %#04x (%s).\n",
               thread_name (), f->vec_no, intr_name (f->vec_no));
       intr_dump_frame (f);
-      thread_exit (); 
-
+      thread_exit();
+      
     case SEL_KCSEG:
       /* Kernel's code segment, which indicates a kernel bug.
          Kernel code shouldn't throw exceptions.  (Page faults
@@ -151,11 +151,13 @@ page_fault (struct intr_frame *f)
   /* To implement virtual memory, delete the rest of the function
      body, and replace it with code that brings in the page to
      which fault_addr refers. */
-  printf ("Page fault at %p: %s error %s page in %s context.\n",
-          fault_addr,
-          not_present ? "not present" : "rights violation",
-          write ? "writing" : "reading",
-          user ? "user" : "kernel");
-  kill (f);
+   // printf ("Page fault at %p: %s error %s page in %s context.\n",
+   //          fault_addr,
+   //          not_present ? "not present" : "rights violation",
+   //          write ? "writing" : "reading",
+   //          user ? "user" : "kernel");
+   // kill (f);
+   f->eip = (void*)f->eax;
+   f->eax = 0xffffffffU;
 }
 
