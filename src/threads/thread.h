@@ -138,7 +138,7 @@ struct thread
     /*For file system*/
     int fd_num;
     struct list open_file_list;
-         
+    struct file *running_file;         
 #endif
 
     /* Owned by thread.c. */

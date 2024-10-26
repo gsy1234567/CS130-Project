@@ -262,9 +262,43 @@ inode_write_at (struct inode *inode, const void *buffer_, off_t size,
   const uint8_t *buffer = buffer_;
   off_t bytes_written = 0;
   uint8_t *bounce = NULL;
+  bool need_more_sectors = false;
+  size_t new_sectors = 0;
 
   if (inode->deny_write_cnt)
     return 0;
+  
+  //determinate whether we need to allocate more sectors
+  {
+    const off_t new_bytes = offset + size;
+    const off_t cur_sectors = bytes_to_sectors(inode_length (inode));
+    new_sectors = bytes_to_sectors(new_bytes);
+    if(new_sectors > (size_t)cur_sectors) {
+      need_more_sectors = true;
+    }
+  }
+
+  //if we need more sectors, ask free-map to allocate them
+  if(need_more_sectors) {
+    struct inode_disk new_inode_disk;
+    if(free_map_allocate(new_sectors, &new_inode_disk.start)) {
+      new_inode_disk.length = offset + size;
+      new_inode_disk.magic = INODE_MAGIC;
+      char buf[BLOCK_SECTOR_SIZE];
+      const int to_copy_sectors = bytes_to_sectors(inode_length(inode));
+      for(int i = 0 ; i < to_copy_sectors ; ++i) {
+        block_read(fs_device, inode->data.start + i, buf);
+        block_write(fs_device, new_inode_disk.start + i, buf);
+      }
+      free_map_release(inode->data.start, bytes_to_sectors(inode_length(inode)));
+      memcpy((void*)&inode->data, (const void*)&new_inode_disk, sizeof new_inode_disk);
+    }
+  } else {
+    //if we should extend the length instead of allocate more sector
+    if(offset + size > inode_length(inode)) {
+      inode->data.length = offset + size;
+    }
+  }
 
   while (size > 0) 
     {

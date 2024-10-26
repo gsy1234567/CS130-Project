@@ -60,8 +60,6 @@ static void syscall_seek_handler(struct intr_frame *);
 static void syscall_tell_handler(struct intr_frame *);
 static void syscall_close_handler(struct intr_frame *);
 
-static void exit_handler(int exit_code);
-
 static bool validate_type(const uint8_t* src, uint8_t* dst, uint8_t size);
 
 
@@ -197,14 +195,14 @@ static void syscall_exit_handler(struct intr_frame *f)
 
 static void syscall_exec_handler(struct intr_frame *f)
 {
-  const char *cmd;
-  if(!validate_type((const uint8_t*)f->esp + 4, (uint8_t*)&cmd, sizeof cmd)) {
+  const char *exe;
+  if(!validate_type((const uint8_t*)f->esp + 4, (uint8_t*)&exe, sizeof exe)) {
     goto Failed;
   }
-  if(!validate_user_string(cmd)) {
+  if(!validate_user_string(exe)) {
     goto Failed;
   } else {
-    f->eax = (uint32_t)process_execute(cmd);
+    f->eax = (uint32_t)process_execute(exe);
     return;
   }
   Failed:
@@ -364,8 +362,6 @@ static void syscall_write_handler(struct intr_frame *f)
      !validate_type((const uint8_t*)f->esp + 12, (uint8_t*)&size, sizeof size))
     goto Failed;
 
-  struct file *file = NULL;
-
   //validate we can read `size` bytes from the `buf`.
   if(!validate_read_user_buffer((void*)buf, size))
     goto Failed;
@@ -375,7 +371,14 @@ static void syscall_write_handler(struct intr_frame *f)
     putbuf((const char*)buf, size);
     f->eax = size;
   } else {
-    PANIC("File growth is not supported!");
+    struct file *file = get_file(fd);
+    if(!file) {
+      goto Failed;
+    } else {
+      filesys_lock_acquire();
+      f->eax = file_write(file, (void*)buf, size);
+      filesys_lock_release();
+    }
   }
   return;
 
@@ -402,14 +405,41 @@ static void syscall_close_handler(struct intr_frame *f)
 }
 
 static void syscall_seek_handler(struct intr_frame *f) {
-  PANIC("syscall_seek_handler: not implemented");
+    int fd;
+    unsigned position;
+    struct file* file;
+
+    if( !validate_type((const uint8_t*)f->esp + 4, (uint8_t*)&fd, sizeof fd) || 
+        !validate_type((const uint8_t*)f->esp + 8, (uint8_t*)&position, sizeof position))
+        goto Failed;
+    
+    if(!(file = get_file(fd)))
+       goto Failed;
+
+    file_seek(file, position);
+    return;
+
+    Failed:
+      exit_handler(-1);
 }
 
 static void syscall_tell_handler(struct intr_frame *f) {
-  PANIC("syscall_tell_handler: not implemented");
+    int fd;
+    struct file* file;
+
+    if(!validate_type((const uint8_t*)f->esp + 4, (uint8_t*)&fd, sizeof fd))
+       goto Failed;
+
+    if(!(file = get_file(fd)))
+      goto Failed;
+
+    f->eax = file_tell(file);
+
+    Failed:
+      exit_handler(-1);
 }
 
-static void exit_handler(int exit_code)
+void exit_handler(int exit_code)
 {
   struct thread *cur = thread_current();
   struct thread *par = cur->parent;

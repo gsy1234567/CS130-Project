@@ -71,23 +71,24 @@ process_execute (const char *file_name)
 
   struct process_ret_frame *ret_frame = 
     (struct process_ret_frame*)malloc(sizeof *ret_frame);
-  ret_frame->exit_code = RANDOM_EXIT_CODE;
+  ret_frame->exit_code = -1;
   ret_frame->finish = false;
   lock_acquire(&thread_current()->lock);
   tid = ret_frame->tid = thread_create (sync_args.page_base, PRI_DEFAULT, start_process, (void*)&sync_args);
   list_push_front(&thread_current()->children_list, &ret_frame->elem);
   lock_release(&thread_current()->lock);
-  if (tid == TID_ERROR)
-    {
+  if (tid == TID_ERROR) {
       palloc_free_page ((void*)sync_args.page_base); 
       list_remove(&ret_frame->elem);
       free((void*)ret_frame);
-    }
-  else
-    {
+  } else {
       sema_down(&sync_args.sema);
+      if(sync_args.argc == -1) {
+        //load failed, set tid = -1
+        tid = -1;
+      }
       palloc_free_page((void*)sync_args.page_base);
-    }
+  }
   return tid;
 }
 
@@ -112,17 +113,20 @@ start_process (void *args_info_)
   success = load (args_info, &if_.eip, &if_.esp);
 
   /* If load failed, quit. */
-  sema_up(&args_info->sema);
-  if (!success) 
-    thread_exit ();
-
-  /* Start the user process by simulating a return from an
-     interrupt, implemented by intr_exit (in
-     threads/intr-stubs.S).  Because intr_exit takes all of its
-     arguments on the stack in the form of a `struct intr_frame',
-     we just point the stack pointer (%esp) to our stack frame
-     and jump to it. */
-  asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
+  if(!success) {
+    args_info->argc = -1;
+    sema_up(&args_info->sema);
+    thread_exit();
+  } else {
+    sema_up(&args_info->sema);
+    /* Start the user process by simulating a return from an
+      interrupt, implemented by intr_exit (in
+      threads/intr-stubs.S).  Because intr_exit takes all of its
+      arguments on the stack in the form of a `struct intr_frame',
+      we just point the stack pointer (%esp) to our stack frame
+      and jump to it. */
+    asm volatile ("movl %0, %%esp; jmp intr_exit" : : "g" (&if_) : "memory");
+  }
   NOT_REACHED ();
 }
 
@@ -160,6 +164,8 @@ process_wait (tid_t child_tid)
       cond_wait(&cur->cv, &cur->lock);
     }
   ret = target_frame->exit_code;
+  list_remove(&target_frame->elem);
+  free((void*)target_frame);
   lock_release(&cur->lock);
   return ret;
 }
@@ -171,27 +177,21 @@ process_exit (void)
 {
   struct thread *cur = thread_current ();
   uint32_t *pd;
-  struct process_ret_frame *ret_frame = NULL;
-  
+
   #ifdef USERPROG
 
-    struct process_ret_frame *cf;
+    struct process_ret_frame *ret_frame = NULL;
 
-
-    for(struct list_elem *iter = list_begin(&cur->children_list) ; 
-                          iter != list_end(&cur->children_list) ; 
-                          iter = list_next(iter))
-      {
-        cf = list_entry(iter, struct process_ret_frame, elem);
-        if(!cf->finish) {
-          process_wait(cf->tid);
-          ASSERT(cf->finish);
-        }
-      }
-
+    lock_acquire(&cur->lock);
     while(!list_empty(&cur->children_list)) {
-      free(list_pop_front(&cur->children_list));
+      ret_frame = list_entry(list_front(&cur->children_list), struct process_ret_frame, elem);
+      while(!ret_frame->finish) {
+        cond_wait(&cur->cv, &cur->lock);
+      }
+      list_remove(&ret_frame->elem);
     }
+    lock_release(&cur->lock);
+
     
     if(cur->is_user_process)
       {
@@ -212,6 +212,7 @@ process_exit (void)
         printf("%s: exit(%d)\n", cur->name, ret_frame->exit_code);
         cond_signal(&cur->parent->cv, &cur->parent->lock);
         lock_release(&cur->parent->lock);
+        file_close(cur->running_file);
       }
 
       //close all file this thread opened
@@ -432,7 +433,15 @@ load (const struct SyncArgs* sync_args, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
+  if(file) {
+    if(!success) {
+      file_close(file);
+    } else {
+      thread_current()->running_file = file;
+      file_deny_write(file);
+    }
+  }
+
   return success;
 }
 
