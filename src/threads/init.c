@@ -38,6 +38,11 @@
 #include "filesys/fsutil.h"
 #endif
 
+#ifdef VM
+#include "vm/evict_manager.h"
+#include "vm/swap_slot.h"
+#endif
+
 /* Page directory with kernel mappings only. */
 uint32_t *init_page_dir;
 
@@ -105,6 +110,7 @@ main (void)
   gdt_init ();
 #endif
 
+
   /* Initialize interrupt handlers. */
   intr_init ();
   timer_init ();
@@ -125,6 +131,11 @@ main (void)
   ide_init ();
   locate_block_devices ();
   filesys_init (format_filesys);
+#endif
+
+#ifdef VM
+  evict_manager_init();
+  swap_slot_init();
 #endif
 
   printf ("Boot complete.\n");

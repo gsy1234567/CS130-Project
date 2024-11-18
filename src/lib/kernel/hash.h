@@ -85,8 +85,17 @@ struct hash_elem *hash_replace (struct hash *, struct hash_elem *);
 struct hash_elem *hash_find (struct hash *, struct hash_elem *);
 struct hash_elem *hash_delete (struct hash *, struct hash_elem *);
 
+struct hash_delete_prev_info {
+  struct list *bucket;
+  struct list_elem *next;
+};
+
+void hash_delete_prev_info_init(struct hash_delete_prev_info *info);
+struct hash_elem *hash_delete_continuos(struct hash *, struct hash_elem *, struct hash_delete_prev_info *);
+
 /* Iteration. */
 void hash_apply (struct hash *, hash_action_func *);
+void hash_apply_aux (struct hash *, hash_action_func *, void *aux);
 void hash_first (struct hash_iterator *, struct hash *);
 struct hash_elem *hash_next (struct hash_iterator *);
 struct hash_elem *hash_cur (struct hash_iterator *);

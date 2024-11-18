@@ -73,6 +73,7 @@ static void
 syscall_handler (struct intr_frame *f) 
 {
   int syscall_id;
+  thread_current()->user_stack = f->esp;
   if(!validate_type((const uint8_t*)f->esp, (uint8_t*)&syscall_id, sizeof syscall_id))
     goto Fail;
   switch(syscall_id)

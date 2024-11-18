@@ -511,9 +511,6 @@ is_thread (const struct thread *t)
 {
   return t != NULL && t->magic == THREAD_MAGIC;
 }
-
-/* Does basic initialization of T as a blocked thread named
-   NAME. */
 static void
 init_thread (struct thread *t, const char *name, int priority)
 {

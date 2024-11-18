@@ -9,7 +9,8 @@
         "${workspaceFolder}/src/lib/user"
       ],
       "defines": [
-        "USERPROG"
+        "USERPROG", 
+        "VM"
         // "FILESYS"
       ],
       "compilerPath": "/usr/bin/gcc",

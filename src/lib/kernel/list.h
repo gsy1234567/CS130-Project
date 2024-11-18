@@ -183,5 +183,7 @@ struct list_elem *list_max (struct list *, list_less_func *, void *aux);
 struct list_elem *list_min (struct list *, list_less_func *, void *aux);
 int list_remove_if(struct list *, list_judge_func *, void *aux);
 void list_foreach(struct list *list, list_foreach_func func, void *aux);
+struct list_elem *list_find(struct list *, list_judge_func *, void *aux);
+
 
 #endif /* lib/kernel/list.h */

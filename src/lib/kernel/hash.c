@@ -153,6 +153,41 @@ hash_delete (struct hash *h, struct hash_elem *e)
   return found;
 }
 
+void hash_delete_prev_info_init(struct hash_delete_prev_info *info) {
+  ASSERT(info != NULL);
+  info->bucket = NULL;
+  info->next = NULL;
+}
+
+struct hash_elem *
+hash_delete_continuos(struct hash *hash, struct hash_elem *elem, struct hash_delete_prev_info *prev_info) {
+  ASSERT(hash != NULL);
+  ASSERT(elem != NULL);
+  ASSERT(prev_info != NULL);
+
+  if(prev_info->bucket  == NULL) {
+    prev_info->bucket = find_bucket(hash, elem);
+  }
+  ASSERT(prev_info->bucket != NULL);
+
+  if(prev_info->next == NULL) {
+    prev_info->next = list_begin(prev_info->bucket);
+  }
+
+  while(prev_info->next != list_end(prev_info->bucket)) {
+    struct list_elem *curr_list_elem = prev_info->next;
+    struct hash_elem *curr_hash_elem = list_elem_to_hash_elem(curr_list_elem);
+    prev_info->next = list_next(prev_info->next);
+    if(!hash->less(curr_hash_elem, elem, hash->aux) && !hash->less(elem, curr_hash_elem, hash->aux)) {
+      list_remove(curr_list_elem);
+      return curr_hash_elem;
+    }
+  }
+  return NULL;
+}
+
+
+
 /* Calls ACTION for each element in hash table H in arbitrary
    order. 
    Modifying hash table H while hash_apply() is running, using
@@ -178,6 +213,25 @@ hash_apply (struct hash *h, hash_action_func *action)
         }
     }
 }
+
+void hash_apply_aux (struct hash * h, hash_action_func * action, void *aux) {
+  size_t i;
+  
+  ASSERT (action != NULL);
+
+  for (i = 0; i < h->bucket_cnt; i++) 
+    {
+      struct list *bucket = &h->buckets[i];
+      struct list_elem *elem, *next;
+
+      for (elem = list_begin (bucket); elem != list_end (bucket); elem = next) 
+        {
+          next = list_next (elem);
+          action (list_elem_to_hash_elem (elem), aux);
+        }
+    }
+}
+
 
 /* Initializes I for iterating hash table H.
 

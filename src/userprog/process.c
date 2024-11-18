@@ -19,6 +19,9 @@
 #include "threads/vaddr.h"
 #include "threads/synch.h"
 #include "threads/malloc.h"
+#include "vm/evict_manager.h"
+#include "threads/pte.h"
+#include "vm/swap_slot.h"
 
 #define RANDOM_EXIT_CODE 114514
 #define MIN(x, y) ((x) < (y) ? (x) : (y))
@@ -92,6 +95,19 @@ process_execute (const char *file_name)
   return tid;
 }
 
+
+/* Does basic initialization of T as a blocked thread named
+   NAME. */
+#ifdef VM
+  static unsigned disk_upages_hash_func(const struct hash_elem *elem, void *aux UNUSED) {
+    return hash_bytes(hash_entry(elem, struct disk_upage_entry, elem)->upage, sizeof(void *));
+  }
+
+  static bool disk_upages_less_func(const struct hash_elem *a, const struct hash_elem *b, void *aux UNUSED) {
+    return hash_entry(a, struct disk_upage_entry, elem)->upage < hash_entry(b, struct disk_upage_entry, elem)->upage;
+  }
+#endif
+
 /* A thread function that loads a user process and starts it
    running. */
 static void
@@ -100,9 +116,13 @@ start_process (void *args_info_)
   struct SyncArgs *args_info = args_info_;
   struct intr_frame if_;
   bool success;
+  struct thread *cur = thread_current();
 
 #ifdef USERPROG
-  thread_current()->is_user_process = true;
+  cur->is_user_process = true;
+  #ifdef VM
+  hash_init(&cur->disk_upages, &disk_upages_hash_func, &disk_upages_less_func, NULL);
+  #endif
 #endif
 
   /* Initialize interrupt frame and load executable. */
@@ -213,11 +233,16 @@ process_exit (void)
         cond_signal(&cur->parent->cv, &cur->parent->lock);
         lock_release(&cur->parent->lock);
         file_close(cur->running_file);
+        destory_all_fd();
+        #ifdef VM
+          untrace_all(cur);
+          swap_free_all(cur);
+        #endif
       }
 
       //close all file this thread opened
-      destory_all_fd();
   #endif
+
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = cur->pagedir;
@@ -526,9 +551,22 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
       size_t page_zero_bytes = PGSIZE - page_read_bytes;
 
       /* Get a page of memory. */
-      uint8_t *kpage = palloc_get_page (PAL_USER);
-      if (kpage == NULL)
-        return false;
+      uint8_t *kpage = palloc_get_page (PAL_ZERO);
+      struct thread* cur = thread_current();
+      struct evict_entry evict_entry;
+
+#ifdef VM
+      if(!kpage) {
+        evict_entry = get_evict();
+        pte_set_unpreset(evict_entry.pte);
+        kpage = evict_entry.kpage;
+        swap_in(kpage, evict_entry.upage, cur, pte_get_perm(*evict_entry.pte));
+      } else {
+        evict_entry.kpage = kpage;
+      }
+#endif
+
+      ASSERT(kpage);
 
       /* Load this page. */
       if (file_read (file, kpage, page_read_bytes) != (int) page_read_bytes)
@@ -544,7 +582,13 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
           palloc_free_page (kpage);
           return false; 
         }
-
+#ifdef VM
+      evict_entry.upage = upage;
+      evict_entry.pte = pagedir_get_pte(cur->pagedir, upage);
+      evict_entry.owner = cur;
+      trace_page(evict_entry);
+#endif
+    
       /* Advance. */
       read_bytes -= page_read_bytes;
       zero_bytes -= page_zero_bytes;

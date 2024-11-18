@@ -7,6 +7,7 @@
 #include "fix_point.h"
 #include "synch.h"
 #include "filesys/file.h"
+#include "lib/kernel/hash.h"
 
 struct process_ret_frame;
 /* States in a thread's life cycle. */
@@ -35,6 +36,13 @@ struct priority_inversion_item
     struct lock*   lock;
     struct list_elem elem;
   };
+
+#ifdef VM
+struct disk_upage_entry {
+  struct hash_elem elem;
+  void *upage;
+};
+#endif
 
 void priority_inversion_item_init(
    struct thread* t, 
@@ -139,6 +147,14 @@ struct thread
     int fd_num;
     struct list open_file_list;
     struct file *running_file;         
+#endif
+
+#ifdef VM
+    //When user program syscall, this varaible
+    //save the user stack pointer.
+    void *user_stack; 
+    //disk upage dict.
+    struct hash disk_upages;
 #endif
 
     /* Owned by thread.c. */

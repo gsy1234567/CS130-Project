@@ -5,6 +5,12 @@
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 #include "userprog/syscall.h"
+#include "threads/palloc.h"
+#include "threads/vaddr.h"
+#include "pagedir.h"
+#include "vm/swap_slot.h"
+#include "vm/evict_manager.h"
+#include "threads/pte.h"
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
@@ -127,6 +133,7 @@ page_fault (struct intr_frame *f)
   bool write;        /* True: access was write, false: access was read. */
   bool user;         /* True: access by user, false: access by kernel. */
   void *fault_addr;  /* Fault address. */
+  struct thread* cur;
 
   /* Obtain faulting address, the virtual address that was
      accessed to cause the fault.  It may point to code or to
@@ -159,8 +166,80 @@ page_fault (struct intr_frame *f)
    //          write ? "writing" : "reading",
    //          user ? "user" : "kernel");
    // kill (f);
-   if(user) {
+   cur = thread_current();
+   if(not_present) {
+
+#ifdef VM
+   #define STACK_TOP 0xc0000000
+   //stack size is 8MB
+   #define STACK_SIZE 1024 * 1024 * 8 
+   void *cur_stack_pointer = user ? f->esp : cur->user_stack;
+   bool is_stack_fault = is_user_vaddr(fault_addr) && (fault_addr >= STACK_TOP - STACK_SIZE);
+   bool in_stack_addr = is_stack_fault && (fault_addr >= cur_stack_pointer);
+   bool is_push_asm = is_stack_fault && ((fault_addr + 4 == cur_stack_pointer) || (fault_addr + 32 == cur_stack_pointer));
+
+   void *kpage;
+   void *fault_page = pg_round_down(fault_addr);
+   ASSERT(pg_ofs(fault_page) == 0);
+
+   struct evict_entry entry;
+   //`栈增长`
+   if(is_push_asm || in_stack_addr) {
+      kpage = palloc_get_page(PAL_USER);
+
+      if(!kpage) {
+        entry = get_evict();
+        pte_set_unpreset(entry.pte);
+        kpage = entry.kpage;
+        swap_in(kpage, entry.upage, cur, pte_get_perm(*entry.pte));
+      } else {
+         entry.kpage = kpage;
+      } 
+      ASSERT(kpage);
+      ASSERT(pg_ofs(kpage) == 0);
+      ASSERT(pagedir_get_page (cur->pagedir, fault_page) == NULL);
+      ASSERT(pagedir_set_page (cur->pagedir, fault_page, kpage, true));
+      
+      entry.upage = fault_page;
+      entry.pte = pagedir_get_pte(cur->pagedir, fault_page);
+      entry.owner = cur;
+      trace_page(entry);
+   } 
+   //`缺页`
+   else if (swap_search(fault_page, cur)) {
+      kpage = palloc_get_page(PAL_USER);
+
+      if(!kpage) {
+         entry = get_evict();
+         pte_set_unpreset(entry.pte);
+         kpage = entry.kpage;
+         swap_in(kpage, entry.upage, cur, pte_get_perm(*entry.pte));
+      } else {
+         entry.kpage = kpage;
+      }
+
+      ASSERT(kpage);
+      ASSERT(pg_ofs(kpage) == 0);
+      
+      struct permission perm;
+      ASSERT(swap_out(kpage, fault_page, cur, &perm));
+      ASSERT(pagedir_get_page (cur->pagedir, fault_page) == NULL);
+      ASSERT(pagedir_set_page (cur->pagedir, fault_page, kpage, true));
+      
+      entry.upage = fault_page;
+      entry.pte = pagedir_get_pte(cur->pagedir, fault_page);
+      entry.owner = cur;
+      pte_set_perm(entry.pte, perm);
+      trace_page(entry);
+
+   } 
+   else {
       exit_handler(-1);
+   }
+#else
+   exit_handler(-1);
+#endif
+      //detect stack growth case
    } else {
       f->eip = (void*)f->eax;
       f->eax = 0xffffffffU;

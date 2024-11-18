@@ -53,7 +53,7 @@ pagedir_destroy (uint32_t *pd)
    on CREATE.  If CREATE is true, then a new page table is
    created and a pointer into it is returned.  Otherwise, a null
    pointer is returned. */
-static uint32_t *
+uint32_t *
 lookup_page (uint32_t *pd, const void *vaddr, bool create)
 {
   uint32_t *pt, *pde;
@@ -261,3 +261,38 @@ invalidate_pagedir (uint32_t *pd)
       pagedir_activate (pd);
     } 
 }
+
+bool pagedir_get_writable(uint32_t *pd, const void *upage) {
+  uint32_t *pte = lookup_page (pd, upage, false);
+  return pte != NULL && (*pte & PTE_W) != 0;
+}
+
+bool pagedir_get_present(uint32_t *pd, const void *upage) {
+  uint32_t *pte = lookup_page (pd, upage, false);
+  return pte != NULL && (*pte & PTE_P) != 0;
+}
+
+void pagedir_set_writable(uint32_t *pd, const void *upage, bool writable) {
+  uint32_t *pte = lookup_page (pd, upage, false);
+  ASSERT(pte != NULL);
+  *pte = writable ? (*pte | PTE_W) : (*pte & ~PTE_W);
+}
+
+void pagedir_set_present(uint32_t *pd, const void *upage, bool present) {
+  uint32_t *pte = lookup_page (pd, upage, false);
+  ASSERT(pte != NULL);
+  *pte = present ? (*pte | PTE_P) : (*pte & ~PTE_P);
+}
+
+struct permission pagedir_get_perm (uint32_t *pd, const void *upage) {
+  struct permission perm;
+  uint32_t *pte = lookup_page(pd, upage, false);
+  perm.user = ((*pte & PTE_U) != 0);
+  perm.write = ((*pte & PTE_W) != 0);
+  return perm;
+}
+
+uint32_t *pagedir_get_pte(uint32_t *pd, const void *upage) {
+  return lookup_page(pd, upage, false);
+}
+

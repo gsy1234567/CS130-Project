@@ -28,6 +28,11 @@
 #define PDBITS  10                         /* Number of page dir bits. */
 #define PDMASK  BITMASK(PDSHIFT, PDBITS)   /* Page directory bits (22:31). */
 
+struct permission {
+  uint8_t write : 1; //0 read-only, 1 read/write
+  uint8_t user : 1;  //0 kernel-only, 1 kernel/user
+};
+
 /* Obtains page table index from a virtual address. */
 static inline unsigned pt_no (const void *va) {
   return ((uintptr_t) va & PTMASK) >> PTSHIFT;
@@ -101,6 +106,28 @@ static inline uint32_t pte_create_user (void *page, bool writable) {
    to. */
 static inline void *pte_get_page (uint32_t pte) {
   return ptov (pte & PTE_ADDR);
+}
+
+static inline struct permission pte_get_perm(uint32_t pte)
+{
+  struct permission perm;
+  perm.user = (pte & PTE_U) != 0;
+  perm.write = (pte & PTE_W) != 0;
+  return perm;
+}
+
+static inline void pte_set_perm(uint32_t *pte, struct permission perm) {
+  *pte &= ~(PTE_U | PTE_W);
+  *pte |= perm.user ? PTE_U : 0;
+  *pte |= perm.write ? PTE_W : 0;
+}
+
+static inline void pte_set_unpreset(uint32_t *pte) {
+  *pte &= ~PTE_P;
+}
+
+static inline void pte_set_preset(uint32_t *pte) {
+  *pte |= PTE_P;
 }
 
 #endif /* threads/pte.h */
